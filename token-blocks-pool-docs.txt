@@ -1,0 +1,248 @@
+# Token Blocks Trading Pool Documentation
+
+## Overview
+The trading pool system implements an Automated Market Maker (AMM) using the constant product formula (x * y = k). 
+It manages liquidity, handles swaps, and provides price discovery for newly created tokens.
+
+## Core Components
+
+### 1. Pool Structure
+```rust
+pub struct Pool {
+    pub token_id: TokenId,
+    pub token_reserve: Balance,
+    pub native_reserve: Balance,
+    pub total_volume: Balance,
+    pub total_fees: Balance,
+    pub fee_rate: u32,
+    pub last_updated: Timestamp,
+    pub volume_24h: Balance,
+    pub last_volume_update: Timestamp,
+}
+```
+
+#### Key Fields Explained
+- `token_id`: Unique identifier for the token
+- `token_reserve`: Current token balance in pool
+- `native_reserve`: Current native token balance in pool
+- `fee_rate`: Trading fee in basis points (30 = 0.3%)
+- `volume_24h`: Rolling 24-hour trading volume
+
+### 2. Initial Pool Setup
+
+When a token wins the voting phase, the pool is automatically initialized with:
+- 20% of total token supply reserved for initial liquidity
+- Corresponding amount of native tokens based on initial price
+
+```rust
+// Example initialization
+let initial_tokens = total_supply * 20 / 100;  // 20% of supply
+let initial_price = 1.0;  // 1 native token per new token
+let initial_native = (initial_tokens as f64 * initial_price) as u128;
+```
+
+### 3. Trading Functions
+
+#### a. Swap Native for Tokens
+```rust
+pub fn swap_native_for_tokens(
+    &mut self,
+    token_id: TokenId,
+    min_tokens_out: U128
+) -> SwapResult
+```
+- Input: Native tokens (attached deposit)
+- Output: Token amount based on current pool ratio
+- Protection: Minimum tokens out parameter
+- Fee: 0.3% of input amount
+
+#### b. Swap Tokens for Native
+```rust
+pub fn swap_tokens_for_native(
+    &mut self,
+    token_id: TokenId,
+    token_amount: U128,
+    min_native_out: U128
+) -> SwapResult
+```
+- Input: Token amount
+- Output: Native tokens based on pool ratio
+- Protection: Minimum native out parameter
+- Fee: 0.3% of input amount
+
+### 4. Liquidity Management
+
+#### a. Adding Liquidity
+```rust
+pub fn add_liquidity(
+    &mut self,
+    token_id: TokenId,
+    token_amount: U128
+) -> Balance
+```
+- Must provide proportional amounts
+- Returns LP tokens representing share of pool
+- Formula: LP tokens = min(token_amount/token_reserve, native_amount/native_reserve) * total_supply
+
+#### b. Removing Liquidity
+```rust
+pub fn remove_liquidity(
+    &mut self,
+    token_id: TokenId,
+    lp_tokens: U128,
+    min_native: U128,
+    min_tokens: U128
+) -> (Balance, Balance)
+```
+- Burns LP tokens
+- Returns proportional share of both assets
+- Includes minimum output protection
+
+### 5. Price Impact Calculation
+
+```rust
+pub fn calculate_price_impact(&self, amount_in: Balance, is_native: bool) -> f64
+```
+- Calculates percentage price change from trade
+- Used to warn users about large trades
+- Formula: |final_price - initial_price| / initial_price * 100
+
+### 6. Volume Tracking
+
+The pool tracks volume in two ways:
+1. Total historical volume
+2. Rolling 24-hour volume
+
+```rust
+pub fn update_volume(&mut self, amount: Balance)
+```
+- Updates both total and 24h volume
+- Resets 24h volume if last update > 24h ago
+
+## Usage Examples
+
+### 1. Basic Swap
+```rust
+// Swap 1 NEAR for tokens
+let result = contract.swap_native_for_tokens(
+    token_id,
+    U128(minimum_tokens_expected)
+);
+```
+
+### 2. Adding Initial Liquidity
+```rust
+// Add initial liquidity
+let lp_tokens = contract.add_liquidity(
+    token_id,
+    U128(token_amount)
+);
+```
+
+### 3. Price Checking
+```rust
+// Get current price and estimate
+let pool_info = contract.get_pool_info(token_id);
+let swap_estimate = contract.get_swap_estimate(
+    token_id,
+    U128(amount_in),
+    true  // is_native
+);
+```
+
+## Security Considerations
+
+### 1. Slippage Protection
+- All swap functions require minimum output amounts
+- Transactions revert if slippage exceeds tolerance
+
+### 2. Price Manipulation Protection
+- Large trades have higher price impact
+- Volume tracking helps detect suspicious activity
+
+### 3. Liquidity Removal Limits
+- Minimum output amounts required
+- Proportional withdrawal enforced
+
+## Error Handling
+
+Common error conditions:
+```rust
+assert!(native_in > 0, "Must attach native tokens");
+assert!(tokens_out >= min_tokens_out.0, "Slippage tolerance exceeded");
+assert!(pool.native_reserve > 0, "Pool not initialized");
+```
+
+## Best Practices
+
+1. **Swapping**
+   - Always set reasonable slippage tolerance
+   - Check price impact before large trades
+   - Use view functions to estimate outputs
+
+2. **Liquidity Provision**
+   - Provide proportional amounts
+   - Check current pool ratio
+   - Set minimum output amounts
+
+3. **Integration**
+   - Handle all error cases
+   - Implement proper slippage checks
+   - Monitor price impact
+
+## Mathematical Formulas
+
+### 1. Constant Product Formula
+```
+x * y = k
+(x + Δx)(y - Δy) = k
+Δy = y - k/(x + Δx)
+```
+
+### 2. Price Impact
+```
+initial_price = out_reserve / in_reserve
+final_price = (out_reserve - amount_out) / (in_reserve + amount_in)
+price_impact = |final_price - initial_price| / initial_price * 100
+```
+
+### 3. Liquidity Shares
+```
+lp_tokens = min(
+    (token_amount * total_supply) / token_reserve,
+    (native_amount * total_supply) / native_reserve
+)
+```
+
+## Events and Logging
+Important events to monitor:
+- Swaps
+- Liquidity changes
+- Price updates
+- Volume changes
+
+## Performance Considerations
+
+1. **Gas Optimization**
+   - Efficient math operations
+   - Minimal state changes
+   - Batched updates
+
+2. **Storage**
+   - Compact data structures
+   - Minimal state access
+   - Efficient serialization
+
+## Maintenance and Upgrades
+
+1. **Fee Updates**
+   - Owner can adjust fee rate
+   - Changes apply to future trades
+
+2. **Emergency Controls**
+   - Pause trading if needed
+   - Emergency liquidity withdrawal
+
+3. **Volume Reset**
+   - Automatic 24h volume reset
+   - Manual reset capability
